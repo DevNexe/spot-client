@@ -3,13 +3,8 @@ package dev.devnexe.spotifyweb
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
-import android.content.SharedPreferences
 import android.content.res.Configuration
-import android.graphics.Color
-import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
-import android.view.Gravity
-import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
@@ -17,9 +12,6 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.TextView
 
 class MainActivity : Activity() {
 
@@ -32,14 +24,10 @@ class MainActivity : Activity() {
 
         // Ширина вёрстки в CSS px по умолчанию. Меньше — элементы крупнее.
         const val DEFAULT_WIDTH = 480
-        const val MIN_WIDTH = 320
-        const val MAX_WIDTH = 1600
-        const val STEP = 1.12f
     }
 
     private lateinit var web: WebView
-    private lateinit var prefs: SharedPreferences
-    private var layoutWidth = DEFAULT_WIDTH
+    private val layoutWidth = DEFAULT_WIDTH
     private var mobileCss = ""
     private var mobileJs = ""
 
@@ -53,17 +41,9 @@ class MainActivity : Activity() {
         mobileCss = assets.open("mobile.css").bufferedReader().use { it.readText() }
         mobileJs = assets.open("mobile.js").bufferedReader().use { it.readText() }
 
-        prefs = getSharedPreferences("ui", MODE_PRIVATE)
-        layoutWidth = prefs.getInt("w2", DEFAULT_WIDTH)
 
         web = WebView(this)
-        val root = FrameLayout(this)
-        root.addView(
-            web,
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-        )
-        root.addView(buildZoomPanel())
-        setContentView(root)
+        setContentView(web)
 
         with(web.settings) {
             javaScriptEnabled = true
@@ -120,46 +100,6 @@ class MainActivity : Activity() {
 
         if (savedInstanceState != null) web.restoreState(savedInstanceState)
         else web.loadUrl(intent?.data?.toString() ?: START_URL)
-    }
-
-    // Кнопки "+" / "−" на правом краю: крупнее / мельче интерфейс. Значение запоминается.
-    private fun buildZoomPanel(): LinearLayout {
-        val d = resources.displayMetrics.density
-        val panel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            alpha = 0.55f
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.END or Gravity.CENTER_VERTICAL
-            ).apply { marginEnd = (6 * d).toInt() }
-        }
-        panel.addView(zoomButton("+") { setLayoutWidth((layoutWidth / STEP).toInt()) })
-        panel.addView(zoomButton("−") { setLayoutWidth((layoutWidth * STEP).toInt()) })
-        return panel
-    }
-
-    private fun zoomButton(label: String, onClick: () -> Unit): TextView {
-        val d = resources.displayMetrics.density
-        val size = (42 * d).toInt()
-        return TextView(this).apply {
-            text = label
-            textSize = 22f
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(0xCC000000.toInt())
-            }
-            layoutParams = LinearLayout.LayoutParams(size, size).apply { topMargin = (6 * d).toInt() }
-            setOnClickListener { onClick() }
-        }
-    }
-
-    private fun setLayoutWidth(w: Int) {
-        layoutWidth = w.coerceIn(MIN_WIDTH, MAX_WIDTH)
-        prefs.edit().putInt("w2", layoutWidth).apply()
-        applyViewport(web)
     }
 
     // Задаём ширину вёрстки и пытаемся снять минимальную ширину у страницы
