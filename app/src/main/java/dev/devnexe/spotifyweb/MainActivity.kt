@@ -91,16 +91,16 @@ class MainActivity : Activity() {
         else web.loadUrl(intent?.data?.toString() ?: START_URL)
     }
 
-    // Берём реальное разрешение и пропорции экрана и отдаём их сайту
+    // Ширина вёрстки = ширина экрана, но если у сайта есть минимальная ширина больше —
+    // замеряем её и расширяем вёрстку ровно до неё, чтобы ничего не вылезало за экран
     private fun applyViewport(view: WebView) {
         val dm = resources.displayMetrics
         val w = Math.round(dm.widthPixels / dm.density / LAYOUT_SCALE)
-        val h = Math.round(dm.heightPixels / dm.density / LAYOUT_SCALE)
         view.evaluateJavascript(
             """
             (function () {
               try {
-                var W = $w, H = $h;
+                var W = $w;
                 var m = document.querySelector('meta[name=viewport]');
                 if (!m) {
                   var host = document.head || document.documentElement;
@@ -109,11 +109,17 @@ class MainActivity : Activity() {
                   m.name = 'viewport';
                   host.appendChild(m);
                 }
-                m.setAttribute('content', 'width=' + W + ', initial-scale=1, user-scalable=yes');
-                var s = window.screen;
-                [['width', W], ['height', H], ['availWidth', W], ['availHeight', H]].forEach(function (p) {
-                  try { Object.defineProperty(s, p[0], { get: function () { return p[1]; }, configurable: true }); } catch (e) {}
-                });
+                function set(x) {
+                  m.setAttribute('content', 'width=' + x + ', initial-scale=1, user-scalable=yes');
+                }
+                function fit() {
+                  var b = document.body, d = document.documentElement;
+                  var sw = Math.max(d ? d.scrollWidth : 0, b ? b.scrollWidth : 0);
+                  var cur = parseInt((m.getAttribute('content').match(/width=(\d+)/) || [])[1] || W, 10);
+                  if (sw > cur) set(sw);
+                }
+                set(W);
+                [300, 900, 2000, 4000].forEach(function (t) { setTimeout(fit, t); });
               } catch (e) {}
             })();
             """.trimIndent(), null
