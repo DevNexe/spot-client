@@ -3,7 +3,13 @@ package dev.devnexe.spotifyweb
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
+import android.content.SharedPreferences
+import android.content.res.Configuration
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.view.Gravity
+import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
@@ -11,28 +17,53 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
 
 class MainActivity : Activity() {
 
     companion object {
         const val START_URL = "https://open.spotify.com/"
-        // Масштаб интерфейса: 1.0 = размеры экрана телефона как есть,
-        // меньше (0.6–0.8) = вёрстка шире и мельче, больше = крупнее.
-        const val LAYOUT_SCALE = 1.0f
         // Chrome на Windows — Spotify отдаёт полноценный веб-плеер, а не "скачайте приложение"
         const val DESKTOP_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+
+        // Ширина вёрстки в CSS px по умолчанию. Меньше — элементы крупнее.
+        const val DEFAULT_WIDTH = 480
+        const val MIN_WIDTH = 320
+        const val MAX_WIDTH = 1600
+        const val STEP = 1.12f
     }
 
     private lateinit var web: WebView
+    private lateinit var prefs: SharedPreferences
+    private var layoutWidth = DEFAULT_WIDTH
+    private var mobileCss = ""
+    private var mobileJs = ""
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // chrome://inspect на ПК — чтобы смотреть DOM Spotify и править селекторы в assets/mobile.css
+        WebView.setWebContentsDebuggingEnabled(true)
+
+        mobileCss = assets.open("mobile.css").bufferedReader().use { it.readText() }
+        mobileJs = assets.open("mobile.js").bufferedReader().use { it.readText() }
+
+        prefs = getSharedPreferences("ui", MODE_PRIVATE)
+        layoutWidth = prefs.getInt("w2", DEFAULT_WIDTH)
+
         web = WebView(this)
-        setContentView(web)
+        val root = FrameLayout(this)
+        root.addView(
+            web,
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        )
+        root.addView(buildZoomPanel())
+        setContentView(root)
 
         with(web.settings) {
             javaScriptEnabled = true
@@ -40,7 +71,7 @@ class MainActivity : Activity() {
             databaseEnabled = true
             mediaPlaybackRequiresUserGesture = false
             userAgentString = DESKTOP_UA
-            useWideViewPort = true          // страница считает, что экран широкий
+            useWideViewPort = true
             loadWithOverviewMode = true
             setSupportZoom(true)
             builtInZoomControls = true
@@ -74,7 +105,7 @@ class MainActivity : Activity() {
                         }.getOrNull()?.let { view.loadUrl(it) }
                         true
                     }
-                    else -> true // spotify:, market: и т.п. — глушим, чтобы не выкидывало в другие приложения
+                    else -> true // spotify:, market: и т.п.
                 }
             }
         }
@@ -91,44 +122,76 @@ class MainActivity : Activity() {
         else web.loadUrl(intent?.data?.toString() ?: START_URL)
     }
 
-    // Ширина вёрстки = ширина экрана, но если у сайта есть минимальная ширина больше —
-    // замеряем её и расширяем вёрстку ровно до неё, чтобы ничего не вылезало за экран
+    // Кнопки "+" / "−" на правом краю: крупнее / мельче интерфейс. Значение запоминается.
+    private fun buildZoomPanel(): LinearLayout {
+        val d = resources.displayMetrics.density
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            alpha = 0.55f
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.END or Gravity.CENTER_VERTICAL
+            ).apply { marginEnd = (6 * d).toInt() }
+        }
+        panel.addView(zoomButton("+") { setLayoutWidth((layoutWidth / STEP).toInt()) })
+        panel.addView(zoomButton("−") { setLayoutWidth((layoutWidth * STEP).toInt()) })
+        return panel
+    }
+
+    private fun zoomButton(label: String, onClick: () -> Unit): TextView {
+        val d = resources.displayMetrics.density
+        val size = (42 * d).toInt()
+        return TextView(this).apply {
+            text = label
+            textSize = 22f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0xCC000000.toInt())
+            }
+            layoutParams = LinearLayout.LayoutParams(size, size).apply { topMargin = (6 * d).toInt() }
+            setOnClickListener { onClick() }
+        }
+    }
+
+    private fun setLayoutWidth(w: Int) {
+        layoutWidth = w.coerceIn(MIN_WIDTH, MAX_WIDTH)
+        prefs.edit().putInt("w2", layoutWidth).apply()
+        applyViewport(web)
+    }
+
+    // Задаём ширину вёрстки и пытаемся снять минимальную ширину у страницы
     private fun applyViewport(view: WebView) {
-        val dm = resources.displayMetrics
-        val w = Math.round(dm.widthPixels / dm.density / LAYOUT_SCALE)
+        val cssJson = org.json.JSONObject.quote(mobileCss)
         view.evaluateJavascript(
             """
             (function () {
               try {
-                var W = $w;
-                var m = document.querySelector('meta[name=viewport]');
-                if (!m) {
+                var W = $layoutWidth;
+                function apply() {
                   var host = document.head || document.documentElement;
                   if (!host) return;
-                  m = document.createElement('meta');
-                  m.name = 'viewport';
-                  host.appendChild(m);
+                  var m = document.querySelector('meta[name=viewport]');
+                  if (!m) { m = document.createElement('meta'); m.name = 'viewport'; host.appendChild(m); }
+                  m.setAttribute('content', 'width=' + W + ', initial-scale=1, user-scalable=yes');
+                  var st = document.getElementById('spw-style');
+                  if (!st) { st = document.createElement('style'); st.id = 'spw-style'; host.appendChild(st); }
+                  st.textContent = 'html,body,#main{min-width:0 !important}' + $cssJson;
                 }
-                function set(x) {
-                  m.setAttribute('content', 'width=' + x + ', initial-scale=1, user-scalable=yes');
-                }
-                function fit() {
-                  var b = document.body, d = document.documentElement;
-                  var sw = Math.max(d ? d.scrollWidth : 0, b ? b.scrollWidth : 0);
-                  var cur = parseInt((m.getAttribute('content').match(/width=(\d+)/) || [])[1] || W, 10);
-                  if (sw > cur) set(sw);
-                }
-                set(W);
-                [300, 900, 2000, 4000].forEach(function (t) { setTimeout(fit, t); });
+                apply();
+                [300, 1500, 4000].forEach(function (t) { setTimeout(apply, t); });
               } catch (e) {}
             })();
             """.trimIndent(), null
         )
+        view.evaluateJavascript(mobileJs, null)
     }
 
-    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+    override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        applyViewport(web) // поворот экрана — пересчитать размеры
+        applyViewport(web)
     }
 
     override fun onNewIntent(intent: Intent) {
